@@ -1,0 +1,13 @@
+{
+  "name": "inb0x",
+  "description": "Full-power Gmail plugin for Claude Code. Real-time email via channels, batch ops, send, smart cleanup.",
+  "version": "0.1.0",
+  "author": {
+    "name": "s0nderlabs",
+    "email": "s0nderlabs.hq@gmail.com",
+    "url": "https://github.com/s0nderlabs"
+  },
+  "repository": "https://github.com/s0nderlabs/inb0x",
+  "license": "Apache-2.0",
+  "keywords": ["gmail", "email", "channel", "inbox"]
+}
