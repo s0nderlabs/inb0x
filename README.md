@@ -73,6 +73,13 @@ On first launch, inb0x opens your browser for Google OAuth authorization. Sign i
 
 > **Note:** Google may show "This app isn't verified" — click **Advanced** → **Go to [app name] (unsafe)**. This is normal for testing-mode OAuth apps.
 
+> **Upgrading from 0.1.0?** 0.1.1 adds the `gmail.settings.basic` scope required by `email__filters`. Google won't silently upgrade existing tokens, so delete the cached refresh token and re-authenticate:
+>
+> ```bash
+> security delete-generic-password -s dev.inb0x-refresh-token   # macOS
+> # or remove INB0X_REFRESH_TOKEN from ~/.config/inb0x/.env       (Linux/Windows)
+> ```
+
 ## Tools
 
 | Tool | Description |

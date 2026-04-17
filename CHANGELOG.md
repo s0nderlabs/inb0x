@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.1] - 2026-04-17
+
+### Fixed
+
+- Gmail filter creation failed with "Insufficient Permission" because the OAuth client only requested the legacy `https://mail.google.com/` scope. Google now enforces per-endpoint scope checks and `users.settings.filters` requires `https://www.googleapis.com/auth/gmail.settings.basic` explicitly. Added the settings scope alongside the legacy scope. Existing users must delete their cached refresh token (`security delete-generic-password -s dev.inb0x-refresh-token` on macOS) and re-authenticate to pick up the new scope — Google will not silently upgrade existing tokens.
+
 ## [0.1.0] - 2026-04-16
 
 ### Added
@@ -20,4 +26,5 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Skills: `/inb0x:inbox`, `/inb0x:notify`, `/inb0x:cleanup`
 - Plugin manifest for Claude Code marketplace distribution
 
+[0.1.1]: https://github.com/s0nderlabs/inb0x/releases/tag/v0.1.1
 [0.1.0]: https://github.com/s0nderlabs/inb0x/releases/tag/v0.1.0

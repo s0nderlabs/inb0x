@@ -4,7 +4,10 @@ import { join, dirname } from 'path'
 import { homedir, platform } from 'os'
 import { google } from 'googleapis'
 
-const SCOPES = ['https://mail.google.com/']
+const SCOPES = [
+  'https://mail.google.com/',
+  'https://www.googleapis.com/auth/gmail.settings.basic',
+]
 const REDIRECT_PORT = 18023
 const REDIRECT_URI = `http://localhost:${REDIRECT_PORT}/callback`
 const ENV_DIR = join(homedir(), '.config', 'inb0x')
