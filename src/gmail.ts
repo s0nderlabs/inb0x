@@ -1,5 +1,6 @@
 import { google, type gmail_v1 } from 'googleapis'
 import type { OAuth2Client } from 'google-auth-library'
+import { buildMimeMessage, type ResolvedAttachment } from './mime.js'
 
 let gmailClient: gmail_v1.Gmail | null = null
 
@@ -48,24 +49,27 @@ export async function getThread(id: string): Promise<gmail_v1.Schema$Thread> {
 
 // ── Send ──────────────────────────────────────────────────────────
 
+function encodeRaw(mime: string): string {
+  return Buffer.from(mime, 'utf8').toString('base64url')
+}
+
 export async function sendMessage(
   to: string,
   subject: string,
   body: string,
   cc?: string,
   bcc?: string,
+  attachments?: ResolvedAttachment[],
 ): Promise<gmail_v1.Schema$Message> {
-  const lines = [
-    `To: ${to}`,
-    ...(cc ? [`Cc: ${cc}`] : []),
-    ...(bcc ? [`Bcc: ${bcc}`] : []),
-    `Subject: ${subject}`,
-    'Content-Type: text/plain; charset=utf-8',
-    '',
+  const mime = buildMimeMessage({
+    headers: { To: to, Cc: cc, Bcc: bcc, Subject: subject },
     body,
-  ]
-  const raw = Buffer.from(lines.join('\r\n')).toString('base64url')
-  const res = await gmail().users.messages.send({ userId: 'me', requestBody: { raw } })
+    attachments,
+  })
+  const res = await gmail().users.messages.send({
+    userId: 'me',
+    requestBody: { raw: encodeRaw(mime) },
+  })
   return res.data
 }
 
@@ -78,20 +82,21 @@ export async function replyToThread(
   subject: string,
   body: string,
   references: string,
+  attachments?: ResolvedAttachment[],
 ): Promise<gmail_v1.Schema$Message> {
-  const lines = [
-    `To: ${to}`,
-    `Subject: ${subject}`,
-    `In-Reply-To: ${messageId}`,
-    `References: ${references}`,
-    'Content-Type: text/plain; charset=utf-8',
-    '',
+  const mime = buildMimeMessage({
+    headers: {
+      To: to,
+      Subject: subject,
+      'In-Reply-To': messageId,
+      References: references,
+    },
     body,
-  ]
-  const raw = Buffer.from(lines.join('\r\n')).toString('base64url')
+    attachments,
+  })
   const res = await gmail().users.messages.send({
     userId: 'me',
-    requestBody: { raw, threadId },
+    requestBody: { raw: encodeRaw(mime), threadId },
   })
   return res.data
 }
@@ -102,28 +107,26 @@ export async function forwardMessage(
   originalMessageId: string,
   to: string,
   body?: string,
+  attachments?: ResolvedAttachment[],
 ): Promise<gmail_v1.Schema$Message> {
   const original = await getMessage(originalMessageId)
-  const headers = original.payload?.headers ?? []
-  const getHeader = (name: string) => headers.find(h => h.name?.toLowerCase() === name.toLowerCase())?.value ?? ''
 
-  const subject = getHeader('Subject').startsWith('Fwd:')
-    ? getHeader('Subject')
-    : `Fwd: ${getHeader('Subject')}`
+  const origSubject = getHeader(original, 'Subject')
+  const subject = origSubject.startsWith('Fwd:') ? origSubject : `Fwd: ${origSubject}`
 
   const originalBody = extractBody(original)
   const forwardBody = [
     ...(body ? [body, '', ''] : []),
     '---------- Forwarded message ----------',
-    `From: ${getHeader('From')}`,
-    `Date: ${getHeader('Date')}`,
-    `Subject: ${getHeader('Subject')}`,
-    `To: ${getHeader('To')}`,
+    `From: ${getHeader(original, 'From')}`,
+    `Date: ${getHeader(original, 'Date')}`,
+    `Subject: ${origSubject}`,
+    `To: ${getHeader(original, 'To')}`,
     '',
     originalBody,
   ].join('\r\n')
 
-  return sendMessage(to, subject, forwardBody)
+  return sendMessage(to, subject, forwardBody, undefined, undefined, attachments)
 }
 
 // ── Batch Modify ──────────────────────────────────────────────────

@@ -8,11 +8,26 @@ import { toolResult, toolError } from './types.js'
 import * as gmail from './gmail.js'
 import { loadConfig, saveConfig } from './config.js'
 import { resolveSavePath, uniquePath } from './paths.js'
+import { resolveAttachment, type AttachmentInput, type ResolvedAttachment } from './mime.js'
 import { dirname } from 'node:path'
 import { mkdir, writeFile } from 'node:fs/promises'
 
 const CHANNEL_NAME = 'inb0x'
-const CHANNEL_VERSION = '0.2.0'
+const CHANNEL_VERSION = '0.3.0'
+
+const ATTACHMENTS_SCHEMA = {
+  type: 'array' as const,
+  description: 'Files to attach. Each entry needs either `path` (preferred — file on disk, supports `~/...`, absolute, or relative) or `data` (inline base64 with required `filename`). `filename` overrides the path basename. `mime_type` overrides extension-based detection.',
+  items: {
+    type: 'object' as const,
+    properties: {
+      path: { type: 'string', description: 'Path to a file on disk' },
+      data: { type: 'string', description: 'Inline base64-encoded bytes (requires filename)' },
+      filename: { type: 'string', description: 'Display filename (overrides path basename; required when using data)' },
+      mime_type: { type: 'string', description: 'Override MIME type (defaults to lookup by extension, fallback application/octet-stream)' },
+    },
+  },
+}
 
 export function createServer(userEmail: string) {
   const mcp = new Server(
@@ -29,9 +44,9 @@ export function createServer(userEmail: string) {
         'Available tools:',
         '- email__search: Search emails using Gmail query syntax',
         '- email__read: Read a full thread or message',
-        '- email__send: Compose and send a new email',
-        '- email__reply: Reply to a thread',
-        '- email__forward: Forward a message',
+        '- email__send: Compose and send a new email (supports attachments: array of {path}|{data,filename})',
+        '- email__reply: Reply to a thread (supports attachments)',
+        '- email__forward: Forward a message (supports attachments; original attachments NOT auto-included)',
         '- email__trash: Batch trash messages (up to 1000)',
         '- email__archive: Batch archive (remove from inbox)',
         '- email__spam: Batch mark as spam',
@@ -78,7 +93,7 @@ export function createServer(userEmail: string) {
       },
       {
         name: 'email__send',
-        description: 'Compose and send a new email.',
+        description: 'Compose and send a new email. Optionally attach files via `attachments` (file paths or inline base64 data).',
         inputSchema: {
           type: 'object' as const,
           properties: {
@@ -87,31 +102,34 @@ export function createServer(userEmail: string) {
             body: { type: 'string', description: 'Email body (plain text)' },
             cc: { type: 'string', description: 'CC recipients, comma-separated' },
             bcc: { type: 'string', description: 'BCC recipients, comma-separated' },
+            attachments: { ...ATTACHMENTS_SCHEMA },
           },
           required: ['to', 'subject', 'body'],
         },
       },
       {
         name: 'email__reply',
-        description: 'Reply to an email thread. Maintains In-Reply-To and References headers.',
+        description: 'Reply to an email thread. Maintains In-Reply-To and References headers. Optionally attach files via `attachments`.',
         inputSchema: {
           type: 'object' as const,
           properties: {
             thread_id: { type: 'string', description: 'Thread ID to reply to' },
             body: { type: 'string', description: 'Reply body (plain text)' },
+            attachments: { ...ATTACHMENTS_SCHEMA },
           },
           required: ['thread_id', 'body'],
         },
       },
       {
         name: 'email__forward',
-        description: 'Forward an email to another address.',
+        description: 'Forward an email to another address. Note: original attachments are NOT auto-included — pass them explicitly via `attachments` (use email__download_attachment first if you need to re-send a downloaded file).',
         inputSchema: {
           type: 'object' as const,
           properties: {
             message_id: { type: 'string', description: 'Message ID to forward' },
             to: { type: 'string', description: 'Recipient email address' },
             body: { type: 'string', description: 'Optional message to prepend' },
+            attachments: { ...ATTACHMENTS_SCHEMA },
           },
           required: ['message_id', 'to'],
         },
@@ -430,6 +448,28 @@ async function handleRead(args: Record<string, unknown>) {
   return toolResult(`Thread (${messages.length} message(s)):\n\n${'='.repeat(60)}\n\n${formatted.join(`\n\n${'='.repeat(60)}\n\n`)}`)
 }
 
+async function resolveAttachmentsArg(
+  raw: unknown,
+): Promise<{ resolved?: ResolvedAttachment[]; error?: string }> {
+  if (raw == null) return { resolved: undefined }
+  if (!Array.isArray(raw)) return { error: 'attachments must be an array' }
+  if (raw.length === 0) return { resolved: undefined }
+  try {
+    const resolved = await Promise.all(
+      (raw as AttachmentInput[]).map(a => resolveAttachment(a)),
+    )
+    return { resolved }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+function attachmentSummary(atts: ResolvedAttachment[] | undefined): string {
+  if (!atts || atts.length === 0) return ''
+  const total = atts.reduce((n, a) => n + a.bytes.length, 0)
+  return ` with ${atts.length} attachment(s), ${gmail.formatBytes(total)} total`
+}
+
 async function handleSend(args: Record<string, unknown>) {
   const to = args.to as string
   const subject = args.subject as string
@@ -437,15 +477,20 @@ async function handleSend(args: Record<string, unknown>) {
   const cc = args.cc as string | undefined
   const bcc = args.bcc as string | undefined
 
-  const msg = await gmail.sendMessage(to, subject, body, cc, bcc)
-  return toolResult(`Email sent to ${to}. Message ID: ${msg.id}`)
+  const { resolved, error } = await resolveAttachmentsArg(args.attachments)
+  if (error) return toolError(`attachments: ${error}`)
+
+  const msg = await gmail.sendMessage(to, subject, body, cc, bcc, resolved)
+  return toolResult(`Email sent to ${to}${attachmentSummary(resolved)}. Message ID: ${msg.id}`)
 }
 
 async function handleReply(args: Record<string, unknown>) {
   const threadId = args.thread_id as string
   const body = args.body as string
 
-  // Get the thread to find the last message
+  const { resolved, error } = await resolveAttachmentsArg(args.attachments)
+  if (error) return toolError(`attachments: ${error}`)
+
   const thread = await gmail.getThread(threadId)
   const messages = thread.messages ?? []
 
@@ -462,8 +507,8 @@ async function handleReply(args: Record<string, unknown>) {
   const replySubject = subject.startsWith('Re:') ? subject : `Re: ${subject}`
   const references = refs ? `${refs} ${msgId}` : msgId
 
-  const msg = await gmail.replyToThread(threadId, msgId, from, replySubject, body, references)
-  return toolResult(`Reply sent to ${from}. Message ID: ${msg.id}`)
+  const msg = await gmail.replyToThread(threadId, msgId, from, replySubject, body, references, resolved)
+  return toolResult(`Reply sent to ${from}${attachmentSummary(resolved)}. Message ID: ${msg.id}`)
 }
 
 async function handleForward(args: Record<string, unknown>) {
@@ -471,8 +516,11 @@ async function handleForward(args: Record<string, unknown>) {
   const to = args.to as string
   const body = args.body as string | undefined
 
-  const msg = await gmail.forwardMessage(messageId, to, body)
-  return toolResult(`Message forwarded to ${to}. Message ID: ${msg.id}`)
+  const { resolved, error } = await resolveAttachmentsArg(args.attachments)
+  if (error) return toolError(`attachments: ${error}`)
+
+  const msg = await gmail.forwardMessage(messageId, to, body, resolved)
+  return toolResult(`Message forwarded to ${to}${attachmentSummary(resolved)}. Message ID: ${msg.id}`)
 }
 
 async function handleTrash(args: Record<string, unknown>) {

@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] - 2026-05-15
+
+### Added
+
+- `email__send`, `email__reply`, and `email__forward` now accept an `attachments` array. Each entry takes either `path` (file on disk, supports `~/...`, absolute, or relative) or `data` (inline base64 with required `filename`). Optional `filename` overrides the path basename; optional `mime_type` overrides the extension-based lookup.
+- New module `src/mime.ts` builds RFC-compliant MIME messages: multipart/mixed for messages with attachments, single-part text/plain otherwise. Handles RFC 2047 base64-encoded-words for non-ASCII subjects, RFC 2231 `filename*=UTF-8''...` for non-ASCII attachment filenames, and 76-char base64 line wrapping for binary payloads.
+- Built-in MIME-type lookup for ~30 common extensions (pdf, xlsx, docx, csv, png/jpg/svg, mp3/mp4, zip, etc.). Unknown extensions fall back to `application/octet-stream`.
+- `email__forward` documentation now notes that original attachments are NOT auto-included — pass them explicitly via the new `attachments` field (use `email__download_attachment` first if you want to re-send a downloaded file).
+
 ## [0.2.0] - 2026-05-15
 
 ### Added
@@ -34,6 +43,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Skills: `/inb0x:inbox`, `/inb0x:notify`, `/inb0x:cleanup`
 - Plugin manifest for Claude Code marketplace distribution
 
+[0.3.0]: https://github.com/s0nderlabs/inb0x/releases/tag/v0.3.0
 [0.2.0]: https://github.com/s0nderlabs/inb0x/releases/tag/v0.2.0
 [0.1.1]: https://github.com/s0nderlabs/inb0x/releases/tag/v0.1.1
 [0.1.0]: https://github.com/s0nderlabs/inb0x/releases/tag/v0.1.0

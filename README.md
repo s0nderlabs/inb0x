@@ -86,9 +86,9 @@ On first launch, inb0x opens your browser for Google OAuth authorization. Sign i
 |------|-------------|
 | `email__search` | Search using Gmail query syntax, paginated |
 | `email__read` | Read full thread or single message |
-| `email__send` | Compose and send (to, cc, bcc) |
-| `email__reply` | Reply in-thread with proper headers |
-| `email__forward` | Forward a message |
+| `email__send` | Compose and send (to, cc, bcc, attachments) |
+| `email__reply` | Reply in-thread with proper headers (attachments supported) |
+| `email__forward` | Forward a message (attachments supported; original attachments NOT auto-included) |
 | `email__trash` | Batch trash (up to 1000/call) |
 | `email__archive` | Batch remove from inbox |
 | `email__spam` | Batch mark as spam |
