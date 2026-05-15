@@ -100,6 +100,8 @@ On first launch, inb0x opens your browser for Google OAuth authorization. Sign i
 | `email__cleanup` | Compound: search + batch action |
 | `email__subscriptions` | Scan senders with unsub method info |
 | `email__config` | View/update notification settings |
+| `email__attachments` | List attachments on a message or whole thread |
+| `email__download_attachment` | Save an attachment to disk (defaults to `~/Downloads`) |
 
 ## Channel Notifications
 

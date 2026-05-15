@@ -164,6 +164,82 @@ export async function batchMarkRead(ids: string[]): Promise<void> {
   await batchModify(ids, undefined, ['UNREAD'])
 }
 
+// ── Attachments ───────────────────────────────────────────────────
+
+export interface AttachmentInfo {
+  messageId: string
+  attachmentId: string
+  filename: string
+  mimeType: string
+  size: number
+  partId: string
+  inline: boolean
+  contentId: string
+}
+
+function walkParts(root: gmail_v1.Schema$MessagePart | undefined): gmail_v1.Schema$MessagePart[] {
+  if (!root) return []
+  const out: gmail_v1.Schema$MessagePart[] = []
+  const visit = (p: gmail_v1.Schema$MessagePart) => {
+    out.push(p)
+    if (p.parts?.length) for (const child of p.parts) visit(child)
+  }
+  visit(root)
+  return out
+}
+
+export function listAttachments(message: gmail_v1.Schema$Message): AttachmentInfo[] {
+  const messageId = message.id ?? ''
+  const out: AttachmentInfo[] = []
+  for (const part of walkParts(message.payload)) {
+    const attachmentId = part.body?.attachmentId ?? ''
+    if (!attachmentId) continue
+    const disposition = getHeader(part, 'Content-Disposition').split(';')[0]?.trim().toLowerCase() ?? ''
+    out.push({
+      messageId,
+      attachmentId,
+      filename: part.filename || `untitled-${part.partId ?? out.length}`,
+      mimeType: part.mimeType ?? 'application/octet-stream',
+      size: part.body?.size ?? 0,
+      partId: part.partId ?? '',
+      inline: disposition === 'inline',
+      contentId: getHeader(part, 'Content-Id').replace(/^<|>$/g, ''),
+    })
+  }
+  return out
+}
+
+export async function getAttachmentData(
+  messageId: string,
+  attachmentId: string,
+): Promise<Buffer> {
+  const res = await gmail().users.messages.attachments.get({
+    userId: 'me',
+    messageId,
+    id: attachmentId,
+  })
+  const data = res.data.data
+  if (!data) throw new Error(`Attachment ${attachmentId} returned no data`)
+  return Buffer.from(data, 'base64url')
+}
+
+export function findAttachment(
+  atts: AttachmentInfo[],
+  selector: { attachmentId?: string; filename?: string; index?: number },
+): AttachmentInfo | null {
+  if (selector.attachmentId) {
+    return atts.find(a => a.attachmentId === selector.attachmentId) ?? null
+  }
+  if (selector.filename) {
+    const want = selector.filename.toLowerCase()
+    return atts.find(a => a.filename.toLowerCase() === want) ?? null
+  }
+  if (typeof selector.index === 'number') {
+    return atts[selector.index] ?? null
+  }
+  return null
+}
+
 // ── Labels ────────────────────────────────────────────────────────
 
 export async function listLabels(): Promise<gmail_v1.Schema$Label[]> {
@@ -237,31 +313,69 @@ export function extractBody(message: gmail_v1.Schema$Message): string {
   return ''
 }
 
-export function getHeader(message: gmail_v1.Schema$Message, name: string): string {
-  return (
-    message.payload?.headers?.find(h => h.name?.toLowerCase() === name.toLowerCase())?.value ?? ''
-  )
+function isMessage(
+  source: gmail_v1.Schema$Message | gmail_v1.Schema$MessagePart,
+): source is gmail_v1.Schema$Message {
+  return (source as gmail_v1.Schema$Message).threadId !== undefined
+    || (source as gmail_v1.Schema$Message).payload !== undefined
+}
+
+export function getHeader(
+  source: gmail_v1.Schema$Message | gmail_v1.Schema$MessagePart,
+  name: string,
+): string {
+  const headers = isMessage(source) ? source.payload?.headers : source.headers
+  return headers?.find(h => h.name?.toLowerCase() === name.toLowerCase())?.value ?? ''
+}
+
+export function formatBytes(bytes: number): string {
+  if (!bytes) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let n = bytes
+  let i = 0
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024
+    i++
+  }
+  return `${n < 10 ? n.toFixed(1) : Math.round(n)} ${units[i]}`
+}
+
+export function formatAttachmentLine(
+  att: AttachmentInfo,
+  idx: number,
+  opts: { multiline?: boolean } = {},
+): string {
+  const flags = att.inline ? ' (inline)' : ''
+  const head = `  [${idx}] ${att.filename} — ${att.mimeType} — ${formatBytes(att.size)}${flags}`
+  return opts.multiline
+    ? `${head}\n      attachment_id: ${att.attachmentId}`
+    : `${head} — attachment_id: ${att.attachmentId}`
+}
+
+export function formatAttachmentManifest(atts: AttachmentInfo[]): string {
+  if (atts.length === 0) return ''
+  const lines = atts.map((a, i) => formatAttachmentLine(a, i))
+  return `Attachments (${atts.length}):\n${lines.join('\n')}`
 }
 
 export function formatMessage(message: gmail_v1.Schema$Message): string {
-  const from = getHeader(message, 'From')
-  const to = getHeader(message, 'To')
-  const subject = getHeader(message, 'Subject')
-  const date = getHeader(message, 'Date')
   const labels = (message.labelIds ?? []).join(', ')
   const body = extractBody(message)
+  const manifest = formatAttachmentManifest(listAttachments(message))
 
-  return [
-    `From: ${from}`,
-    `To: ${to}`,
-    `Subject: ${subject}`,
-    `Date: ${date}`,
+  const lines = [
+    `From: ${getHeader(message, 'From')}`,
+    `To: ${getHeader(message, 'To')}`,
+    `Subject: ${getHeader(message, 'Subject')}`,
+    `Date: ${getHeader(message, 'Date')}`,
     `Labels: ${labels}`,
     `Message ID: ${message.id}`,
     `Thread ID: ${message.threadId}`,
     '',
     body,
-  ].join('\n')
+  ]
+  if (manifest) lines.push('', manifest)
+  return lines.join('\n')
 }
 
 export function formatMessagePreview(message: gmail_v1.Schema$Message): string {

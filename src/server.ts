@@ -7,9 +7,12 @@ import {
 import { toolResult, toolError } from './types.js'
 import * as gmail from './gmail.js'
 import { loadConfig, saveConfig } from './config.js'
+import { resolveSavePath, uniquePath } from './paths.js'
+import { dirname } from 'node:path'
+import { mkdir, writeFile } from 'node:fs/promises'
 
 const CHANNEL_NAME = 'inb0x'
-const CHANNEL_VERSION = '0.1.0'
+const CHANNEL_VERSION = '0.2.0'
 
 export function createServer(userEmail: string) {
   const mcp = new Server(
@@ -40,6 +43,8 @@ export function createServer(userEmail: string) {
         '- email__cleanup: Smart bulk operations (search + batch modify)',
         '- email__subscriptions: List subscription senders with unsubscribe info',
         '- email__config: View or update notification settings (VIP, keywords, categories, quiet hours)',
+        '- email__attachments: List attachments on a message or thread',
+        '- email__download_attachment: Download an attachment to a local file',
       ].join('\n'),
     },
   )
@@ -262,6 +267,35 @@ export function createServer(userEmail: string) {
         },
       },
       {
+        name: 'email__attachments',
+        description: 'List attachments on a message or across an entire thread. Returns filenames, mime types, sizes, and attachment IDs (use these with email__download_attachment).',
+        inputSchema: {
+          type: 'object' as const,
+          properties: {
+            id: { type: 'string', description: 'Message ID or Thread ID' },
+            type: { type: 'string', enum: ['message', 'thread'], description: 'Whether `id` refers to a message or full thread (default: message)' },
+            include_inline: { type: 'boolean', description: 'Include inline parts (embedded images referenced by HTML cid:). Default: false.' },
+          },
+          required: ['id'],
+        },
+      },
+      {
+        name: 'email__download_attachment',
+        description: 'Download an attachment from a message to a local file. Identify the attachment by attachment_id (preferred), filename, or zero-based index within the message. The save destination can be an absolute path, a directory (the original filename is appended), or omitted to default to ~/Downloads.',
+        inputSchema: {
+          type: 'object' as const,
+          properties: {
+            message_id: { type: 'string', description: 'Gmail message ID that holds the attachment' },
+            attachment_id: { type: 'string', description: 'Attachment ID from email__attachments (preferred selector)' },
+            filename: { type: 'string', description: 'Match attachment by exact filename (case-insensitive). Used if attachment_id is omitted.' },
+            index: { type: 'number', description: 'Zero-based index within listAttachments order. Used if attachment_id and filename are both omitted.' },
+            save_path: { type: 'string', description: 'Where to save. Absolute path, directory path, or `~/...`. Defaults to ~/Downloads/<filename>. If the path is an existing directory or ends with "/", the original filename is appended.' },
+            overwrite: { type: 'boolean', description: 'Overwrite an existing file at the target path. Default: false (a numeric suffix is added to avoid collisions).' },
+          },
+          required: ['message_id'],
+        },
+      },
+      {
         name: 'email__config',
         description: 'View or update notification settings (VIP list, keyword filters, categories, quiet hours, digest mode).',
         inputSchema: {
@@ -329,6 +363,10 @@ export function createServer(userEmail: string) {
           return await handleCleanup(args)
         case 'email__subscriptions':
           return await handleSubscriptions(args)
+        case 'email__attachments':
+          return await handleAttachments(args)
+        case 'email__download_attachment':
+          return await handleDownloadAttachment(args)
         case 'email__config':
           return handleConfig(args)
         default:
@@ -742,6 +780,78 @@ async function handleSubscriptions(args: Record<string, unknown>) {
 
   return toolResult(
     `Subscriptions (${sorted.length} senders from ${allIds.length} scanned emails):\n\n${lines.join('\n\n')}`,
+  )
+}
+
+async function handleAttachments(args: Record<string, unknown>) {
+  const id = args.id as string
+  const type = (args.type as string) ?? 'message'
+  const includeInline = (args.include_inline as boolean) ?? false
+
+  const messages = type === 'thread'
+    ? (await gmail.getThread(id)).messages ?? []
+    : [await gmail.getMessage(id)]
+
+  if (messages.length === 0) return toolResult('No messages found.')
+
+  const sections: string[] = []
+  let total = 0
+  for (const msg of messages) {
+    const atts = gmail.listAttachments(msg).filter(a => includeInline || !a.inline)
+    if (atts.length === 0) continue
+    total += atts.length
+    const subject = gmail.getHeader(msg, 'Subject') || '(no subject)'
+    const from = gmail.getHeader(msg, 'From')
+    const lines = atts.map((a, idx) => gmail.formatAttachmentLine(a, idx, { multiline: true }))
+    sections.push(
+      `Message ${msg.id} — ${subject}\n  From: ${from}\n${lines.join('\n')}`,
+    )
+  }
+
+  if (total === 0) {
+    const hint = includeInline ? '' : ' (try include_inline:true to also list embedded images)'
+    return toolResult(`No attachments found${hint}.`)
+  }
+
+  const header = type === 'thread'
+    ? `Thread ${id}: ${total} attachment(s) across ${sections.length} message(s)`
+    : `Message ${id}: ${total} attachment(s)`
+  return toolResult(`${header}\n\n${sections.join('\n\n')}\n\nDownload with: email__download_attachment {message_id, attachment_id}`)
+}
+
+async function handleDownloadAttachment(args: Record<string, unknown>) {
+  const messageId = args.message_id as string
+  const attachmentId = args.attachment_id as string | undefined
+  const filename = args.filename as string | undefined
+  const index = args.index as number | undefined
+  const savePath = args.save_path as string | undefined
+  const overwrite = (args.overwrite as boolean) ?? false
+
+  if (!messageId) return toolError('message_id is required')
+  if (!attachmentId && !filename && index === undefined) {
+    return toolError('Provide one of: attachment_id, filename, or index')
+  }
+
+  const msg = await gmail.getMessage(messageId)
+  const available = gmail.listAttachments(msg)
+  const att = gmail.findAttachment(available, { attachmentId, filename, index })
+  if (!att) {
+    if (available.length === 0) {
+      return toolError(`Message ${messageId} has no attachments.`)
+    }
+    const list = available.map((a, i) => gmail.formatAttachmentLine(a, i)).join('\n')
+    return toolError(`Attachment not found. Available:\n${list}`)
+  }
+
+  const data = await gmail.getAttachmentData(att.messageId, att.attachmentId)
+  const target = await resolveSavePath(savePath, att.filename)
+  const finalPath = await uniquePath(target, overwrite)
+
+  await mkdir(dirname(finalPath), { recursive: true })
+  await writeFile(finalPath, data)
+
+  return toolResult(
+    `Saved ${att.filename} (${att.mimeType}, ${gmail.formatBytes(data.length)}) to:\n${finalPath}`,
   )
 }
 

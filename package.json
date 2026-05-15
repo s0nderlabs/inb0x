@@ -1,6 +1,6 @@
 {
   "name": "inb0x",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "description": "Full-power Gmail plugin for Claude Code. Real-time email via channels, batch ops, send, smart cleanup.",
   "main": "src/index.ts",

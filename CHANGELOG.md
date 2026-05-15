@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.0] - 2026-05-15
+
+### Added
+
+- `email__attachments` tool — lists every attachment on a message, or across an entire thread. Returns filename, mime type, size, attachment ID, and an `inline` flag for embedded images. Optional `include_inline` opts in to listing cid-referenced images.
+- `email__download_attachment` tool — fetches an attachment via the Gmail attachments API and writes it to disk. Identify the attachment by `attachment_id` (preferred), `filename`, or zero-based `index`. The `save_path` argument accepts an absolute path, a directory (the original filename is appended), or `~/...`. Defaults to `~/Downloads/<filename>`. Collisions are resolved with a numeric suffix unless `overwrite: true`.
+- `formatMessage` now appends an "Attachments (n):" manifest with attachment IDs, so `email__read` exposes downloadable handles inline.
+
 ## [0.1.1] - 2026-04-17
 
 ### Fixed
@@ -26,5 +34,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Skills: `/inb0x:inbox`, `/inb0x:notify`, `/inb0x:cleanup`
 - Plugin manifest for Claude Code marketplace distribution
 
+[0.2.0]: https://github.com/s0nderlabs/inb0x/releases/tag/v0.2.0
 [0.1.1]: https://github.com/s0nderlabs/inb0x/releases/tag/v0.1.1
 [0.1.0]: https://github.com/s0nderlabs/inb0x/releases/tag/v0.1.0
